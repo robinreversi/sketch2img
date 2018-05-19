@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import time
 import os
 import copy
-from utils import get_dataloaders, get_args
+from utils import get_dataloaders, get_default_parser
 
 def train_model(args):
     dataloaders = get_dataloaders(args)
@@ -100,9 +100,9 @@ def train_model(args):
     # load best model weights
     model.load_state_dict(best_model_wts)
     now = datetime.datetime.now()
-    torch.save(model.state_dict(), os.path.join(args.save_dir, f"{now.month}{now.day}{now.hour}{now.minute}")
+    torch.save(model.state_dict(), os.path.join(args.save_dir, f"{now.month}{now.day}{now.hour}{now.minute}"))
 
-if __name__ == 'main':
+if __name__ == '__main__':
     parser = get_default_parser()
     args = parser.parse_args()
     train_model(args)

@@ -97,7 +97,7 @@ def eval_model(args):
     print(f'top_5 acc = {sum(top_5) / total_imgs}')
 
 
-if name == '__main__':
+if __name__ == '__main__':
     parser = get_default_parser()
     parser.add_argument('--pca', type=int, default=0, 
                         help="Use PCA to reduce dims to specified value; if 0, do not use PCA")

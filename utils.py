@@ -1,5 +1,6 @@
 from loaders.EitzDataLoader import EitzDataLoader
 from PIL import Image
+import numpy as np
 import argparse
 
 SQUEEZENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -12,9 +13,9 @@ def get_dataloaders(args):
         dataset: the dataset to use; one of 'eitz', 'sketchy'
     """
     if args.dataset == 'eitz':
-        dataloaders = {'train': EitzDataLoader(args.n_workers, args.batch_size, 'train'), 
-                       'val': EitzDataLoader(args.n_workers, 1, 'val'), 
-                       'test': EitzDataLoader(args.n_workers, 1, 'test')}
+        dataloaders = {'train': EitzDataLoader(args, 'train'), 
+                       'val': EitzDataLoader(args, 'val'), 
+                       'test': EitzDataLoader(args, 'test')}
     elif args.dataset == 'sketchy':
         dataloaders = {'train': SketchyDataLoader(args.n_workers, args.batch_size, 'train'), 
                        'val': SketchyDataLoader(args.n_workers, 1, 'val'), 
@@ -98,16 +99,15 @@ def get_default_parser():
                         help='Directory in which to save checkpoints.')
     parser.add_argument('--checkpoint_path', type=str, default='',
                         help='Path to checkpoint to load. If empty, start from scratch.')
-    parser.add_argument('--data_dir', type=str, help='Path to data directory')
     parser.add_argument('--save_dir', type=str, help='Path to save directory')
     parser.add_argument('--name', type=str, help='Experiment name.')
     parser.add_argument('--img_format', type=str, default='png', choices=('jpg', 'png'), help='Format for input images')
     parser.add_argument('--num_threads', default=4, type=int, help='Number of threads for the DataLoader.')
-    parser.add_argument('--toy', action='store_true', default=0, help='Use reduced dataset if true.')
+    parser.add_argument('--toy', action='store_true', help='Use reduced dataset if true.')
     parser.add_argument('--toy_size', type=int, default=5,
                         help='How many of each type to include in the toy dataset.')
     parser.add_argument('--img_size', type=int, default=512,
                         help='Size of img to use')
-   
+    parser.add_argument('--dataset', type=str, required=True, choices=('eitz', 'sketchy'), help='which dataset to use')
     return parser
 
