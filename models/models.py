@@ -13,7 +13,7 @@ import os
 import copy
 
 class FeatureExtractor(nn.Module):
-    def __init__(self, args):
+    def __init__(self):
         super().__init__()
     
     def forward(self, x):
@@ -35,7 +35,14 @@ class SqueezeNet(FeatureExtractor):
         super().__init__()
         self.features = torchvision.models.squeezenet1_1(pretrained=True).features
         self.gap = nn.AdaptiveAvgPool2d(1)
-        self.classifier = nn.Linear(512, args.num_labels)
+        self.name = 'squeeze_net'
+
+        if args.dataset == 'eitz':
+            num_labels = 250
+        else:
+            raise NotImplementedError
+            
+        self.classifier = nn.Linear(512, num_labels)
 
         
     def forward(self, x):

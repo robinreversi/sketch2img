@@ -44,7 +44,7 @@ class EitzDataset(Dataset):
         csv_name = phase + ".csv"
         data = pd.read_csv(EITZ_FP + csv_name)
         if toy:
-            data = pd.sample(data, toy_size)
+            data = data.sample(toy_size)
         data = list(data.itertuples(index=False))
         return data
             
