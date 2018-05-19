@@ -8,14 +8,14 @@ from .constants import *
 class EitzDataset(Dataset):
     """Base dataset for CT studies."""
 
-    def __init__(self, split, img_size=256):
+    def __init__(self, phase, img_size=256):
         """
         Args:
-            split: The split to use = (train, val, test)
+            phase: The phase to use = (train, val, test)
         """
-        self.is_training = split == 'train'
+        self.is_training = phase == 'train'
         self.img_size = img_size
-        self.data = self._load_data(split)
+        self.data = self._load_data(phase)
 
 
     def __getitem__(self, item):
@@ -33,9 +33,9 @@ class EitzDataset(Dataset):
         img.thumbnail((self.img_size, self.img_size), Image.ANTIALIAS)
         return np.array(img)
     
-    def _load_data(self, split):
-        """Loads data from `split` set"""
-        csv_name = split + ".csv"
+    def _load_data(self, phase):
+        """Loads data from `phase` set"""
+        csv_name = phase + ".csv"
         data = pd.read_csv(EITZ_FP + csv_name)
         data = list(data.itertuples(index=False))
         return data

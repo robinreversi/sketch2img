@@ -1,6 +1,6 @@
 from __future__ import print_function, division
 
-
+import datetime
 from loaders.EitzDataLoader import EitzDataLoader
 import torch
 import torch.nn as nn
@@ -15,40 +15,32 @@ import matplotlib.pyplot as plt
 import time
 import os
 import copy
+from utils import get_dataloaders, get_args
 
-class Struct:
-    def __init__(self, **entries):
-        self.__dict__.update(entries)
-        
-args = {
-    "num_labels": 250
-}
+def train_model(args):
+    dataloaders = get_dataloaders(args)
 
-args = Struct(**args)
+    dataset_sizes = {'train': len(dataloaders['train'].dataset),
+                'val': len(dataloaders['val'].dataset),
+                'test': len(dataloaders['test'].dataset)}
 
-model = SqueezeNet(args)
-model.type(torch.cuda.FloatTensor)
-
-dataloaders = {'train': EitzDataLoader(16, 16, 'train'), 
-               'val': EitzDataLoader(16, 16, 'val'), 
-               'test': EitzDataLoader(16, 16, 'test')}
-
-device = 'cuda'
-
-dataset_sizes = {'train': 15000,
-                'val': 2500,
-                'test': 2500}
-
-def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
-    since = time.time()
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    criterion = nn.CrossEntropyLoss() 
+    optimizer = optim.Adam(model.parameters(), lr=.0001, weight_decay=1e-2)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=8, gamma=.5)
+    
+    start = time.time()
 
     best_model_wts = copy.deepcopy(model.state_dict())
     best_loss = float('inf')
 
-    for epoch in range(num_epochs):
-        print('Epoch {}/{}'.format(epoch, num_epochs - 1))
+    for epoch in range(args.num_epochs):
+        print('Epoch {}/{}'.format(epoch, args.num_epochs - 1))
         print('-' * 10)
-
+        
+        epoch_start = time.time()
+        
         # Each epoch has a training and validation phase
         for phase in ['train', 'val']:
             if phase == 'train':
@@ -95,22 +87,23 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
             if phase == 'val' and epoch_loss > best_loss:
                 best_loss = epoch_loss
                 best_model_wts = copy.deepcopy(model.state_dict())
-
+        
+        epoch_time_lapse = time.time() - epoch_starts
+        print('Epoch complete in {:.0f}m {:.0f}s'.format(epoch_time_lapse // 60, epoch_time_lapse % 60))
         print()
 
-    time_elapsed = time.time() - since
+    time_elapsed = time.time() - start
     print('Training complete in {:.0f}m {:.0f}s'.format(
         time_elapsed // 60, time_elapsed % 60))
     print('Best val loss: {:4f}'.format(best_loss))
 
     # load best model weights
     model.load_state_dict(best_model_wts)
-    return model
+    now = datetime.datetime.now()
+    torch.save(model.state_dict(), os.path.join(args.save_dir, f"{now.month}{now.day}{now.hour}{now.minute}")
 
-criterion = nn.CrossEntropyLoss() 
-optimizer = optim.Adam(model.parameters(), lr=.0001, weight_decay=0)
-scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=8, gamma=.5)
-
-best_model = train_model(model, criterion, optimizer, scheduler, num_epochs=10)
-
-torch.save(model.state_dict(), f'/home/robincheong/sbir/checkpoints/SqueezeNet/eitz2012/{best_loss}')
+if __name__ == 'main':
+    parser = get_default_parser()
+    args = parser.parse_args()
+    train_model(args)
+    

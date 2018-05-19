@@ -12,14 +12,11 @@ class SketchyDataset(Dataset):
                    If not train, take pairs in order and define len as len(src_paths).
         """
         
-        PARENTDIR = "/home/robincheong/sbir/data/sketchy/"
+        PARENTDIR = "/home/robincheong/data/sketchy/"
         data_file = self._load_file(PARENTDIR + split + ".txt")
         
         photo_dir = PARENTDIR + f"photo/{photo_transform}"
         sketch_dir = PARENTDIR + f"photo/{sketch_transform}"
-        
-        
-        
         
         self.img_format = img_format
         self.is_training = is_training
