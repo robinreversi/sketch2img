@@ -2,6 +2,8 @@ from loaders.EitzDataLoader import EitzDataLoader
 from PIL import Image
 import numpy as np
 import argparse
+import torchvision.transforms as T
+
 
 SQUEEZENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 SQUEEZENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -25,29 +27,29 @@ def get_dataloaders(args):
 
     return dataloaders
 
-def img_path_to_tensor(img_path, imgsize=512):
+def img_path_to_tensor(img_path, img_size=512):
     """ Reads an image and converts to a tensor.
     
     Args:
         img_path: path to the image
         img_size: final size of image
     """
-    img = preprocess(Image.open(img_path), imgsize=512)
+    img = preprocess(Image.open(img_path), img_size)
     return img
 
 
-def features_from_img(model, img_path, img_size=512):
+def feats_from_img(model, device, img_path, img_size=512):
     """ Converts a list of file paths into corresponding list of tensors.
     
     Args:
         img_list: list of file paths containing images to convert to tensor
-        img_format: file extension to use
+        device: cuda or cpu
         img_size: size of image to use
         model: model to use as a feature extractor
     """
     
-    tensor = img_path_to_tensor(img_path, img_size)
-    feats = model.extract_features(tensor).cpu().numpy()
+    tensor = img_path_to_tensor(img_path, img_size).to(device)
+    feats = model.extract_features(tensor).detach().cpu().numpy()
     return feats
 
         
@@ -69,7 +71,7 @@ def get_img_list(phase):
         phase: the phase of development -- one of (train / val / test)
     """
     name = phase + 'set'
-    with open(f'/home/robincheong/sbir/data/sketchy/{name}.txt','r') as f:
+    with open(f'/home/robincheong/data/sketchy/{name}.txt','r') as f:
         img_list = [c.rstrip() for c in f.readlines()]
     return img_list
 
@@ -94,12 +96,14 @@ def rescale(x):
 def get_default_parser():
     """ Parses args for running the model."""
     parser = argparse.ArgumentParser()
+    parser.add_argument('--num_epochs', type=int, default=10, help='Batch size.')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size.')
-    parser.add_argument('--checkpoints_dir', type=str, default='/home/robincheong/sbir/checkpoints/',
+    parser.add_argument('--checkpoints_dir', type=str, default='/home/robincheong/sketch2img/checkpoints/',
                         help='Directory in which to save checkpoints.')
     parser.add_argument('--checkpoint_path', type=str, default='',
                         help='Path to checkpoint to load. If empty, start from scratch.')
-    parser.add_argument('--save_dir', type=str, help='Path to save directory')
+    parser.add_argument('--save_dir', type=str, default='/home/robincheong/sketch2img/model_states/',
+                        help='Path to save directory')
     parser.add_argument('--name', type=str, help='Experiment name.')
     parser.add_argument('--img_format', type=str, default='png', choices=('jpg', 'png'), help='Format for input images')
     parser.add_argument('--num_threads', default=4, type=int, help='Number of threads for the DataLoader.')

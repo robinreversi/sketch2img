@@ -14,6 +14,7 @@ import torchvision
 import matplotlib.pyplot as plt
 import time
 import os
+from pathlib import Path
 import copy
 from utils import get_dataloaders, get_default_parser
 
@@ -25,6 +26,9 @@ def train_model(args):
                 'test': len(dataloaders['test'].dataset)}
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    model = SqueezeNet(args)
+    model.to(device)
     
     criterion = nn.CrossEntropyLoss() 
     optimizer = optim.Adam(model.parameters(), lr=.0001, weight_decay=1e-2)
@@ -88,7 +92,7 @@ def train_model(args):
                 best_loss = epoch_loss
                 best_model_wts = copy.deepcopy(model.state_dict())
         
-        epoch_time_lapse = time.time() - epoch_starts
+        epoch_time_lapse = time.time() - epoch_start
         print('Epoch complete in {:.0f}m {:.0f}s'.format(epoch_time_lapse // 60, epoch_time_lapse % 60))
         print()
 
@@ -100,7 +104,12 @@ def train_model(args):
     # load best model weights
     model.load_state_dict(best_model_wts)
     now = datetime.datetime.now()
-    torch.save(model.state_dict(), os.path.join(args.save_dir, f"{now.month}{now.day}{now.hour}{now.minute}"))
+    
+    save_dir = Path(args.save_dir) / (model.name + f'_{args.name}')
+    if not save_dir.exists():
+        os.mkdir(save_dir)
+    
+    torch.save(model.state_dict(), save_dir / f"{now.month}{now.day}{now.hour}{now.minute}")
 
 if __name__ == '__main__':
     parser = get_default_parser()
