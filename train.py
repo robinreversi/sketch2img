@@ -5,7 +5,7 @@ from loaders.EitzDataLoader import EitzDataLoader
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.models import SqueezeNet
+from models.models import SqueezeNet, ResNet
 
 import torch.optim as optim
 from torch.optim import lr_scheduler
@@ -16,7 +16,7 @@ import time
 import os
 from pathlib import Path
 import copy
-from utils import get_dataloaders, get_default_parser
+from utils import get_dataloaders, get_default_parser, load_sketchy_images, get_loss_fn
 
 def train_model(args):
     dataloaders = get_dataloaders(args)
@@ -27,12 +27,14 @@ def train_model(args):
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    model = SqueezeNet(args)
+    # TODO: Change to load model from args
+    
+    model = ResNet(args)
     model.to(device)
     
-    criterion = nn.CrossEntropyLoss() 
+    criterion = get_loss_fn(args.dataset, args.loss_type)
     optimizer = optim.Adam(model.parameters(), lr=.0001, weight_decay=1e-2)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=8, gamma=.5)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
     
     start = time.time()
 
@@ -42,50 +44,78 @@ def train_model(args):
     for epoch in range(args.num_epochs):
         print('Epoch {}/{}'.format(epoch, args.num_epochs - 1))
         print('-' * 10)
-        
         epoch_start = time.time()
         
         # Each epoch has a training and validation phase
         for phase in ['train', 'val']:
             if phase == 'train':
-                scheduler.step()
+                scheduler.step(best_loss)
                 model.train()  # Set model to training mode
             else:
                 model.eval()   # Set model to evaluate mode
 
             running_loss = 0.0
-            running_corrects = 0.0
-
+            running_corrects = 0.0    
+            
             # Iterate over data.
             for inputs, labels in dataloaders[phase]:
-                inputs = inputs.float()
-                inputs = inputs.to(device)
-                labels = labels.to(device)
-
+                
                 # zero the parameter gradients
                 optimizer.zero_grad()
-
-                # forward
-                # track history if only in train
-                with torch.set_grad_enabled(phase == 'train'):
-                    outputs = model(inputs)
-                    _, preds = torch.max(outputs, 1)
-                    loss = criterion(outputs, labels)
-
-                    # backward + optimize only if in training phase
-                    if phase == 'train':
-                        loss.backward()
-                        optimizer.step()
                 
-                # statistics
-                running_loss += loss.item() * inputs.size(0)
-                running_corrects += torch.sum(preds == labels.data)
+                if args.dataset == "eitz":
+                    inputs = inputs.float()
+                    inputs = inputs.to(device)
+                    labels = labels.to(device)
+                    
+                    # forward
+                    # track history if only in train
+                    with torch.set_grad_enabled(phase == 'train'):
+                        outputs = model(inputs)
+                        _, preds = torch.max(outputs, 1)
+                        loss = criterion(outputs, labels)
+
+                        # backward + optimize only if in training phase
+                        if phase == 'train':
+                            loss.backward()
+                            optimizer.step()
+
+                    # statistics
+                    running_loss += loss.item() * inputs.size(0)
+                    running_corrects += torch.sum(preds == labels.data)
+                    
+                elif args.dataset == "sketchy":
+                    # converts list of tuples of images paths of length N into flattened
+                    # tensor of size N * args.loss_type 
+                    N = len(inputs)
+                    inputs = load_sketchy_images(inputs, args.loss_type, device)
+                    labels = labels.to(device)
+                    
+                    with torch.set_grad_enabled(phase == 'train'):
+                        features = model.extract_features(inputs)
+                        
+                        if args.loss_type == "classify":
+                            outputs = model.make_prediction(features)
+                            _, preds = torch.max(outputs, 1)
+                            loss = criterion(outputs, labels)
+                            print(loss)
+                        else:
+                            # reorganize into photo embeds and sketch embeds
+                            # feed in embed for photo and sketch
+                            loss = criterion(*torch.split(features, N))
+                            print(loss)
+                            if phase == "train":
+                                loss.backward()
+                                optimizer.step()
+                                
+                break       
 
             epoch_loss = running_loss / dataset_sizes[phase]
-            epoch_acc = running_corrects / dataset_sizes[phase]
-
-            print('{} Loss: {:.4f} Acc: {:.4f}'.format(
-                phase, epoch_loss, epoch_acc))
+            print('{} Loss: {:.4f}'.format(phase, epoch_loss))
+            
+            if args.loss_type == "classify":
+                epoch_acc = running_corrects / dataset_sizes[phase]
+                print('{} Acc: {:.4f}'.format(phase, epoch_acc))
 
             # deep copy the model
             if phase == 'val' and epoch_loss > best_loss:
