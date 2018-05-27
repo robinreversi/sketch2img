@@ -189,5 +189,7 @@ def get_default_parser():
     parser.add_argument('--local', required=True, help='true if running on local computer')
     parser.add_argument('--loss_type', type=str, required=True, choices=('classify', 'binary', 'trip', 'quad'), 
                         help='which type of contrastive loss to use')
+    parser.add_argument('--log_dir', type=str, required=True, default="logs/",
+                        help="directory to save the tensorboard log files to")
     return parser
 

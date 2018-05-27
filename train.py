@@ -17,6 +17,8 @@ import os
 from pathlib import Path
 import copy
 from utils import get_dataloaders, get_default_parser, load_sketchy_images, get_loss_fn
+from tensorboardX import SummaryWriter
+
 
 def train_model(args):
     dataloaders = get_dataloaders(args)
@@ -35,6 +37,8 @@ def train_model(args):
     criterion = get_loss_fn(args.dataset, args.loss_type)
     optimizer = optim.Adam(model.parameters(), lr=.0001, weight_decay=1e-2)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+    
+    writer = SummaryWriter(args.log_dir + "/{}_{}".format(model.name, args.name))
     
     start = time.time()
 
@@ -107,12 +111,16 @@ def train_model(args):
                             if phase == "train":
                                 loss.backward()
                                 optimizer.step()
+                        
+                    running_loss += loss.item() * inputs.size(0)
                                 
                 break       
 
             epoch_loss = running_loss / dataset_sizes[phase]
             print('{} Loss: {:.4f}'.format(phase, epoch_loss))
             
+            writer.add_scalar('{} Loss'.format(phase), epoch_loss, epoch)
+
             if args.loss_type == "classify":
                 epoch_acc = running_corrects / dataset_sizes[phase]
                 print('{} Acc: {:.4f}'.format(phase, epoch_acc))
@@ -126,6 +134,8 @@ def train_model(args):
         print('Epoch complete in {:.0f}m {:.0f}s'.format(epoch_time_lapse // 60, epoch_time_lapse % 60))
         print()
 
+    writer.close()
+        
     time_elapsed = time.time() - start
     print('Training complete in {:.0f}m {:.0f}s'.format(
         time_elapsed // 60, time_elapsed % 60))
