@@ -2,8 +2,6 @@ from __future__ import print_function, division
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.optim import lr_scheduler
 import numpy as np
 import torchvision
 from torchvision import datasets, models, transforms
@@ -11,21 +9,12 @@ import matplotlib.pyplot as plt
 import time
 import os
 import copy
-
-class FeatureExtractor(nn.Module):
-    def __init__(self):
-        super().__init__()
+from .archetypes import *
     
-    def forward(self, x):
-        raise NotImplementedError
-
-    def extract_features(self, x, is_sketch=True):
-        raise NotImplementedError
-
+        
 class SqueezeNet(FeatureExtractor):
-    """
-        SqueezeNet is a pre-trained model designed to be fine tuned on the Eitz 2012 Dataset
-        for better performance on SBIR
+    """ SqueezeNet is a pre-trained model to be fine-tuned on the Eitz 2012 Dataset as a feature extractor
+        for both sketches and photos.
     """
     def __init__(self, args):
         """
@@ -74,3 +63,56 @@ class SqueezeNet(FeatureExtractor):
         features = self.features(x)
         features = self.gap(features)
         return features
+
+class ResNet(FeatureExtractor):
+    
+    def __init__(self, args):
+        super().__init__()
+        resnet18 = torchvision.models.resnet18(pretrained=True)
+        modules = list(resnet18.children())[:-1]
+        self.features = nn.Sequential(*modules)
+        self.classifier = nn.Linear(512, 125)
+        self.name = "resnet"
+
+    def forward(self, x):
+        logits = self.features(x)
+        logits = self.classifier(logits)
+        return logits
+    
+    def extract_features(self, x):
+        return self.features(x)
+    
+    def make_prediction(self, features):
+        return self.classifier(features)
+    
+# [WIP]
+class VAE(FeatureExtractor):
+    
+    def __init__(self, args):
+        
+        # encoder portion of the network uses 
+        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.fc_mean = nn.Linear(512, args.h_size)
+        self.fc_logvar = nn.Linear(512, args.h_size)
+        
+    def encode(self, x):
+        a = self.features(x)
+        a = self.gap(a)
+        return self.fc_mean(a), self.fc_logvar(a)
+
+    def reparameterize(self, mu, logvar):
+        if self.training:
+            std = torch.exp(0.5*logvar)
+            eps = torch.randn_like(std)
+            return eps.mul(std).add_(mu)
+        else:
+            return mu
+
+    def decode(self, z):
+        h3 = F.relu(self.fc3(z))
+        return F.sigmoid(self.fc4(h3))
+
+    def forward(self, x):
+        mu, logvar = self.encode(x.view(-1, 784))
+        z = self.reparameterize(mu, logvar)
+        return self.decode(z), mu, logvar

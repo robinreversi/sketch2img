@@ -6,7 +6,7 @@ from PIL import Image
 from .constants import *
 
 class EitzDataset(Dataset):
-    """Base dataset for CT studies."""
+    """Dataset class for the Eitz 2012 Dataset."""
 
     def __init__(self, args, phase):
         """
@@ -27,11 +27,13 @@ class EitzDataset(Dataset):
     def __len__(self):
         return len(self.data)
     
+    
     def _get_img(self, img_path):
         """Load an image from `img_path`."""
         img = Image.open(EITZ_FP + "sketches/" + img_path)
         img.thumbnail((self.img_size, self.img_size), Image.ANTIALIAS)
         return np.array(img)
+    
     
     def _load_data(self, phase, toy=False, toy_size=False):
         """Loads data from `phase` set

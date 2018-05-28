@@ -1,33 +1,42 @@
 import numpy as np
+import pandas as pd
+import os
 from torch.utils.data import Dataset
 
 
 class SketchyDataset(Dataset):
-
-    def __init__(self, photo_transform="tx_000000000000/", sketch_transform="tx_000000000000/", split="train"):
+    
+    def __init__(self, local, phase):
         """
         Args:
-            transform: The type of image transformation to use as specified in the README
-            split: If train, shuffle pairs and define len as max of len(src_paths) and len(tgt_paths).
-                   If not train, take pairs in order and define len as len(src_paths).
+            local: whether I'm running this code on my local computer or gcloud
+            phase: One of "train", "val", "test"
+            loss_type: One of "binary", "trip", "quad" 
         """
         
-        PARENTDIR = "/home/robincheong/data/sketchy/"
-        data_file = self._load_file(PARENTDIR + split + ".txt")
+        self.data_dir = "/Users/robincheong/Documents/Stanford/CS231N/Project/data/sketchy/" \
+                        if local else "/home/robincheong/data/sketchy/" 
+        self.phase = phase
         
-        photo_dir = PARENTDIR + f"photo/{photo_transform}"
-        sketch_dir = PARENTDIR + f"photo/{sketch_transform}"
+        self.data = pd.read_csv(os.path.join(self.data_dir, "{}set.csv".format(phase)))
         
-        self.img_format = img_format
-        self.is_training = is_training
-
+        
     def __len__(self):
-        raise NotImplementedError
+        return len(self.data)
 
+    
     def __getitem__(self, item):
-        raise NotImplementedError
+        selection = self.data.iloc[item]
+        correct_photo_path = selection['Photo Path']
+        sketch_path = selection['Sketch Path']
+        label = selection['Label']
+                
+        same_category = self.data[(self.data['Label'] == label) 
+                                  & (self.data['Sketch Path'] != sketch_path)
+                                  & (self.data['Photo Path'] != correct_photo_path)]
+        same_cat_diff_photo_path = same_category.sample()['Sketch Path'].item()
 
-    def _load_data(filepath):
-        data = {}
-        with open(filepath, "r") as fp:
-            
+        diff_category = self.data[(self.data['Label'] != label)]
+        diff_cat_photo_path = diff_category.sample()['Sketch Path'].item()
+        return '++'.join([sketch_path, correct_photo_path, same_cat_diff_photo_path, diff_cat_photo_path]), label
+        
