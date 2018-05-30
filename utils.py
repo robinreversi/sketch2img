@@ -188,14 +188,13 @@ def rescale(x):
 def get_default_parser():
     """ Parses args for running the model."""
     parser = argparse.ArgumentParser()
-    parser.add_argument('--num_epochs', type=int, default=10, help='Batch size.')
-    parser.add_argument('--batch_size', type=int, default=16, help='Batch size.')
+    parser.add_argument('--num_epochs', type=int, default=10, help='number of epochs.')
+    parser.add_argument('--batch_size', type=int, default=16, help='batch size.')
     parser.add_argument('--ckpt_path', type=str, default='',
-                        help='Path to checkpoint to load. If empty, start from scratch.')
+                        help='checkpoint path of the model to load, if '' starts from scratch')
     parser.add_argument('--save_dir', type=str, default='/home/robincheong/sketch2img/ckpts/',
                         help='Directory in which to save checkpoints.')
-    parser.add_argument('--name', type=str, required=True, help='Experiment name.')
-    parser.add_argument('--img_format', type=str, default='png', choices=('jpg', 'png'), help='Format for input images')
+    parser.add_argument('--name', type=str, required=True, help='name to use for tensorboard logging')
     parser.add_argument('--num_threads', default=4, type=int, help='Number of threads for the DataLoader.')
     parser.add_argument('--toy', action='store_true', help='Use reduced dataset if true.')
     parser.add_argument('--toy_size', type=int, default=5,

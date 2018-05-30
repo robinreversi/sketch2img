@@ -36,6 +36,9 @@ def train_model(args):
 
     model.to(device)
     
+    if args.ckpt_path:
+        model.load_state_dict(torch.load(args.ckpt_path))
+    
     criterion = get_loss_fn(args.dataset, args.loss_type)
     optimizer = optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.wd, momentum=.9, nesterov=True)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=len(dataloaders['train']) // 3, gamma=.9)
