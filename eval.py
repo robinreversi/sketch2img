@@ -17,15 +17,20 @@ from models.models import SqueezeNet
 from utils import get_img_list, img_path_to_tensor, feats_from_img, get_default_parser
 
 def eval_model(args):    
-    model = SqueezeNet(args)
-    
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    model.to(device)
-    model.load_state_dict(torch.load("/home/robincheong/sketch2img/checkpoints/SqueezeNet/eitz2012/attempt2"))
-    model.eval()
+    if args.model == "resnet":
+        model = ResNet(args)
+    elif args.model == "squeezenet":
+        model = SqueezeNet(args)
 
-    # get test images' feats
+    model.to(device)
+    
+    if args.ckpt_path:
+        model.load_state_dict(torch.load(args.ckpt_path))
+    
+    model.eval()
+    
     test_img_list = get_img_list('test')
     test_feats = []
         
@@ -41,7 +46,6 @@ def eval_model(args):
     for i, local_path in enumerate(test_img_list):
         img_cat, img_name = local_path.split('/')
         img_name = img_name.split(".")[0]
-        print(img_cat, img_name)
         full_photo_path = os.path.join(PHOTO_DIR, local_path)
         test_feats.append(feats_from_img(model, device, full_photo_path, args.img_size))
         
@@ -64,7 +68,7 @@ def eval_model(args):
         pca.fit(all_sketch_feats)
         test_feats = pca.transform(test_feats)
     
-    nbrs = NearestNeighbors(n_neighbors=len(test_feats), algorithm='brute', metric='cosine').fit(test_feats)
+    nbrs = NearestNeighbors(n_neighbors=len(test_feats), algorithm='brute', metric='l2').fit(test_feats)
 
     top_5 = 0
     top_1 = 0
