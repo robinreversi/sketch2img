@@ -6,16 +6,15 @@ from torch.utils.data import Dataset
 
 class SketchyDataset(Dataset):
     
-    def __init__(self, local, phase):
+    def __init__(self, args, phase):
         """
         Args:
             local: whether I'm running this code on my local computer or gcloud
             phase: One of "train", "val", "test"
             loss_type: One of "binary", "trip", "quad" 
         """
-        
         self.data_dir = "/Users/robincheong/Documents/Stanford/CS231N/Project/data/sketchy/" \
-                        if local else "/home/robincheong/data/sketchy/" 
+                        if args.local  else "/home/robincheong/data/sketchy/" 
         self.phase = phase
         
         self.data = pd.read_csv(os.path.join(self.data_dir, "{}set.csv".format(phase)))

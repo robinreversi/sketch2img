@@ -2,6 +2,7 @@ from loaders.EitzDataLoader import EitzDataLoader
 from loaders.SketchyDataLoader import SketchyDataLoader
 from PIL import Image
 import numpy as np
+import torch.nn as nn
 import argparse
 import torch
 import torchvision.transforms as T
@@ -30,7 +31,7 @@ def get_dataloaders(args):
     return dataloaders
 
 
-def load_sketchy_images(inputs, loss_type, device, img_size=512):
+def load_sketchy_images(inputs, loss_type, device, img_size):
     """ Converts a list of file path tuples into corresponding tensor-images.
     
     Args:
@@ -62,37 +63,55 @@ def load_sketchy_images(inputs, loss_type, device, img_size=512):
     return torch.cat(all_images)
         
 def get_loss_fn(dataset, loss_type):
+    ce_loss = nn.CrossEntropyLoss()
+    
+    def mse_loss(input_, target):
+        return (input_ - target) ** 2 / len(input_)
+    
     if dataset == "eitz" or loss_type == "classify":
-        return nn.CrossEntropyLoss()
-    elif dataset == "sketchy":
-        def mse_loss(input_, target):
-            return torch.sum((input_ - target) ** 2) / len(input_)
+        def classify_loss(sketch_logits, photo_logits, labels):
+            return ce_loss(sketch_logits, labels) + ce_loss(photo_logits, labels)
 
+        return classify_loss
+    elif dataset == "sketchy":
+        
         if loss_type == "binary":
-            return mse_loss
+            def binary_loss(sketch_embed, correct_photo_embed, 
+                            sketch_logits, photo_logits, labels):
+                
+                embedding_loss = torch.sum(mse_loss(sketch_embed, correct_photo_embed))
+                classification_loss = ce_loss(sketch_logits, labels) + ce_loss(photo_logits, labels)
+                return embedding_loss, classification_loss 
+                
+            return binary_loss
 
         elif loss_type == "trip":
             def trip_loss(sketch_embed, correct_photo_embed, 
-                          same_cat_diff_photo_embed, alpha=.2):
+                          same_cat_diff_photo_embed, 
+                          sketch_logits, photo_logits, labels, alpha=.2):
+                
                 loss1 = mse_loss(sketch_embed, correct_photo_embed)
                 loss2 = mse_loss(sketch_embed, same_cat_diff_photo_embed)
-                total_loss = max(loss1 - loss2 + alpha, 0)
-                return sum(total_loss)
-
+                embedding_loss = torch.sum(torch.clamp(loss1 - loss2 + alpha, min=0))
+                classification_loss = ce_loss(sketch_logits, labels) + ce_loss(photo_logits, labels)
+                return embedding_loss, classification_loss 
+            
             return trip_loss
 
         elif loss_type == "quad":
             def quad_loss(sketch_embed, correct_photo_embed, 
-                          same_cat_diff_photo_embed, diff_cat_photo_embed, alpha=.2):
-                loss = nn.MSELoss()
-                loss1 = max(loss(sketch_embed, correct_photo_embed) 
-                            - loss(sketch_embed, same_cat_diff_photo_embed) + alpha, 0)
-                loss2 = max(loss(sketch_embed, correct_photo_embed),
-                            - loss(sketch_embed, diff_cat_photo_embed) + alpha, 0)
-                loss3 = max(loss(sketch_embed, same_cat_diff_photo_embed)
-                            - loss(sketch_embed, diff_cat_photo_embed) + alpha, 0)
-                total_loss = loss1 + loss2 + loss3
-                return sum(total_loss)
+                          same_cat_diff_photo_embed, diff_cat_photo_embed, 
+                          sketch_logits, photo_logits, labels, alpha=.2):
+                
+                loss1 = torch.clamp(mse_loss(sketch_embed, correct_photo_embed) 
+                            - mse_loss(sketch_embed, same_cat_diff_photo_embed) + alpha, min=0)
+                loss2 = torch.clamp(mse_loss(sketch_embed, correct_photo_embed)
+                            - mse_loss(sketch_embed, diff_cat_photo_embed) + alpha, min=0)
+                loss3 = torch.clamp(mse_loss(sketch_embed, same_cat_diff_photo_embed)
+                            - mse_loss(sketch_embed, diff_cat_photo_embed) + alpha, min=0)
+                embedding_loss = torch.sum(loss1 + loss2 + loss3)
+                classification_loss = ce_loss(sketch_logits, labels) + ce_loss(photo_logits, labels)
+                return embedding_loss, classification_loss 
 
             return quad_loss
     else: 
@@ -171,13 +190,11 @@ def get_default_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--num_epochs', type=int, default=10, help='Batch size.')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size.')
-    parser.add_argument('--checkpoints_dir', type=str, default='/home/robincheong/sketch2img/checkpoints/',
-                        help='Directory in which to save checkpoints.')
-    parser.add_argument('--checkpoint_path', type=str, default='',
+    parser.add_argument('--ckpt_path', type=str, default='',
                         help='Path to checkpoint to load. If empty, start from scratch.')
-    parser.add_argument('--save_dir', type=str, default='/home/robincheong/sketch2img/model_states/',
-                        help='Path to save directory')
-    parser.add_argument('--name', type=str, help='Experiment name.')
+    parser.add_argument('--save_dir', type=str, default='/home/robincheong/sketch2img/ckpts/',
+                        help='Directory in which to save checkpoints.')
+    parser.add_argument('--name', type=str, required=True, help='Experiment name.')
     parser.add_argument('--img_format', type=str, default='png', choices=('jpg', 'png'), help='Format for input images')
     parser.add_argument('--num_threads', default=4, type=int, help='Number of threads for the DataLoader.')
     parser.add_argument('--toy', action='store_true', help='Use reduced dataset if true.')
@@ -186,10 +203,14 @@ def get_default_parser():
     parser.add_argument('--img_size', type=int, default=512,
                         help='Size of img to use')
     parser.add_argument('--dataset', type=str, required=True, choices=('eitz', 'sketchy'), help='which dataset to use')
-    parser.add_argument('--local', required=True, help='true if running on local computer')
+    parser.add_argument('--local', action="store_true", default=False, help='true if running on local computer')
     parser.add_argument('--loss_type', type=str, required=True, choices=('classify', 'binary', 'trip', 'quad'), 
                         help='which type of contrastive loss to use')
     parser.add_argument('--log_dir', type=str, required=True, default="logs/",
                         help="directory to save the tensorboard log files to")
+    parser.add_argument('--model', type=str, required=True, choices=('resnet', 'squeezenet'), help='which model to use')
+    parser.add_argument('--alpha', required=True, type=float, help='weighting for embedding vs classification loss')
+    parser.add_argument('--lr', default=1e-2, type=float, help="learning rate to start with")
+    parser.add_argument('--wd', default=5e-3, type=float, help="l2 reg term")
     return parser
 

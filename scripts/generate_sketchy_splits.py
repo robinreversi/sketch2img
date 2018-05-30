@@ -64,7 +64,9 @@ def create_sketchy_set(prefix, transform, photos_list, phase, labels_dict):
                 num_sketches_for_photo += 1
         
         if num_sketches_for_photo < 5:
+            print(photo_path)
             print("Less than five photos for {}".format(photo_path))
+            print("Only {}".format(num_sketches_for_photo))
         
         total_sketches += num_sketches_for_photo
     
@@ -81,7 +83,7 @@ def create_sketchy_set(prefix, transform, photos_list, phase, labels_dict):
 def get_photo_lists(prefix, transform):
     with open(prefix + "testset.txt", 'r') as f:
         test_photos = f.readlines()
-        test_photos = list(map(lambda x: x[:-5], test_photos))
+        test_photos = list(map(lambda x: x.split('.')[0], test_photos))
             
     ## Construct validation photos list
     datadir = prefix + "photo/" + transform 
@@ -107,7 +109,7 @@ def get_photo_lists(prefix, transform):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--local', action="store_true", default=True,
+    parser.add_argument('--local', action="store_true", default=False,
                         help='if on local branch, change paths')
     parser.add_argument('--transform', type=str, default="tx_000100000000/",
                         help='the transformation of the iamge to use')

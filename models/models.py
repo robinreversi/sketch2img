@@ -28,6 +28,8 @@ class SqueezeNet(FeatureExtractor):
 
         if args.dataset == 'eitz':
             num_labels = 250
+        elif args.dataset == "sketchy":
+            num_labels = 125
         else:
             raise NotImplementedError
             
@@ -69,8 +71,9 @@ class ResNet(FeatureExtractor):
     def __init__(self, args):
         super().__init__()
         resnet18 = torchvision.models.resnet18(pretrained=True)
-        modules = list(resnet18.children())[:-1]
+        modules = list(resnet18.children())[:-2]
         self.features = nn.Sequential(*modules)
+        self.gap = nn.AdaptiveAvgPool2d(1)
         self.classifier = nn.Linear(512, 125)
         self.name = "resnet"
 
@@ -80,9 +83,13 @@ class ResNet(FeatureExtractor):
         return logits
     
     def extract_features(self, x):
-        return self.features(x)
+        N = len(x)
+        features = self.features(x)
+        features = self.gap(features).squeeze()
+        features = features.view(N, -1)
+        return features
     
-    def make_prediction(self, features):
+    def make_predictions(self, features):
         return self.classifier(features)
     
 # [WIP]
