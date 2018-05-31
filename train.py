@@ -1,7 +1,6 @@
 from __future__ import print_function, division
 
 import datetime
-from loaders.EitzDataLoader import EitzDataLoader
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -19,7 +18,6 @@ import copy
 from utils import get_dataloaders, get_default_parser, load_sketchy_images, get_loss_fn
 from tensorboardX import SummaryWriter
 
-
 def train_model(args):
     dataloaders = get_dataloaders(args)
 
@@ -30,7 +28,7 @@ def train_model(args):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
     if args.model == "resnet":
-        model = ResNet(args)
+        model = ResNet()
     elif args.model == "squeezenet":
         model = SqueezeNet(args)
 
@@ -228,6 +226,23 @@ def train_model(args):
 
 if __name__ == '__main__':
     parser = get_default_parser()
+    parser.add_argument('--alpha', required=True, type=float, help='weighting for embedding vs classification loss')
+    parser.add_argument('--lr', default=1e-2, type=float, help="learning rate to start with")
+    parser.add_argument('--wd', default=5e-3, type=float, help="l2 reg term")
+    parser.add_argument('--loss_type', type=str, required=True, choices=('classify', 'binary', 'trip', 'quad'), 
+                        help='which type of contrastive loss to use')
+    parser.add_argument('--num_epochs', type=int, default=10, help='number of epochs.')
+    parser.add_argument('--batch_size', type=int, default=16, help='batch size.')
+    parser.add_argument('--toy', action='store_true', help='Use reduced dataset if true.')
+    parser.add_argument('--toy_size', type=int, default=5,
+                        help='How many of each type to include in the toy dataset.')
+    parser.add_argument('--save_dir', type=str, default='/home/robincheong/sketch2img/ckpts/',
+                        help='Directory in which to save checkpoints.')
+    parser.add_argument('--log_dir', type=str, required=True, default="logs/",
+                        help="directory to save the tensorboard log files to")
+    parser.add_argument('--name', type=str, required=True, help='name to use for tensorboard logging')
+
+
     args = parser.parse_args()
     train_model(args)
     

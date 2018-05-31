@@ -8,8 +8,11 @@ import torch
 import torchvision.transforms as T
 
 
-SQUEEZENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-SQUEEZENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+PHOTO_MEAN = np.array([0.47122188, 0.44775212, 0.39636577], dtype=np.float32)
+SKETCH_MEAN = np.array([0.95263444, 0.95263444, 0.95263444], dtype=np.float32)
+
+SKETCH_STD = np.array([0.35874852, 0.35874852, 0.35874852], dtype=np.float32)
+PHOTO_STD = np.array([0.46127741, 0.46127741, 0.46127741], dtype=np.float32)
 
 def get_dataloaders(args):
     """ Returns a dict with dataloaders for each phase.
@@ -56,7 +59,8 @@ def load_sketchy_images(inputs, loss_type, device, img_size):
         elif loss_type == "trip":
             example = example[:3]
         for idx, path in enumerate(example):
-            images[idx].append(preprocess(Image.open(path), img_size).to(device))
+            is_sketch = idx == 0
+            images[idx].append(preprocess(Image.open(path), is_sketch, img_size).to(device))
     all_images = [] 
     for img_set in images:
         all_images += img_set
@@ -117,18 +121,19 @@ def get_loss_fn(dataset, loss_type):
     else: 
         raise ValueError
     
-def img_path_to_tensor(img_path, img_size=512):
+def img_path_to_tensor(img_path, is_sketch, img_size=512):
     """ Reads an image and converts to a tensor.
     
     Args:
         img_path: path to the image
         img_size: final size of image
     """
-    img = preprocess(Image.open(img_path), img_size)
+    # Need to adjust this to have .jpg ext
+    img = preprocess(Image.open(img_path), is_sketch, img_size)
     return img
 
 
-def feats_from_img(model, device, img_path, img_size=512):
+def feats_from_img(model, device, img_path, is_sketch, img_size=512):
     """ Converts a list of file paths into corresponding list of tensors.
     
     Args:
@@ -138,41 +143,41 @@ def feats_from_img(model, device, img_path, img_size=512):
         model: model to use as a feature extractor
     """
     
-    tensor = img_path_to_tensor(img_path, img_size).to(device)
+    tensor = img_path_to_tensor(img_path, is_sketch, img_size).to(device)
     feats = model.extract_features(tensor).detach().cpu().numpy()
     return feats
 
         
-def preprocess(img, size=512, mean=[0,0,0], std=[1,1,1]):
+def preprocess(img, is_sketch, img_size=256):
+    mean = SKETCH_MEAN if is_sketch else PHOTO_MEAN
+    std = SKETCH_STD if is_sketch else PHOTO_STD
     transform = T.Compose([
-        T.Resize(size),
+        T.Resize(img_size),
         T.ToTensor(),
-        T.Normalize(mean=mean,
-                    std=std),
+        T.Normalize(mean=torch.tensor(mean, dtype=torch.float32),
+                    std=torch.tensor(std, dtype=torch.float32)),
         T.Lambda(lambda x: x[None]),
     ])
     return transform(img)
 
 
-def get_img_list(phase):
-    """ Returns a list containing all the images in the test set.
-    
-    Args:
-        phase: the phase of development -- one of (train / val / test)
-    """
-    name = phase + 'set'
-    file = f'/Users/robincheong/Documents/Stanford/CS231N/Project/data/sketchy/{name}.txt'
-#     file = f'/home/robincheong/data/sketchy/{name}.txt'
+def get_img_list(args):
+    """ Returns a list containing all the images in the args.phase set. """
+    name = args.phase + 'set'
+    file = f'/Users/robincheong/Documents/Stanford/CS231N/Project/data/sketchy/{name}.txt' if args.local\
+           else f'/home/robincheong/data/sketchy/{name}.txt'
     with open(file, 'r') as f:
         img_list = [c.rstrip() for c in f.readlines()]
     return img_list
 
 
-def deprocess(img, mean=[0,0,0], std=[1,1,1]):
+def deprocess(img, is_sketch):
+    mean = SKETCH_MEAN if is_sketch else PHOTO_MEAN
+    std = SKETCH_STD if is_sketch else PHOTO_STD
     transform = T.Compose([
         T.Lambda(lambda x: x[0]),
         T.Normalize(mean=mean, std=[1.0 / s for s in std]),
-        T.Normalize(mean=[-m for m in mean], std=[1, 1, 1]),
+        T.Normalize(mean=[-m for m in mean], std=std),
         T.Lambda(rescale),
         T.ToPILImage(),
     ])
@@ -188,28 +193,14 @@ def rescale(x):
 def get_default_parser():
     """ Parses args for running the model."""
     parser = argparse.ArgumentParser()
-    parser.add_argument('--num_epochs', type=int, default=10, help='number of epochs.')
-    parser.add_argument('--batch_size', type=int, default=16, help='batch size.')
     parser.add_argument('--ckpt_path', type=str, default='',
                         help='checkpoint path of the model to load, if '' starts from scratch')
-    parser.add_argument('--save_dir', type=str, default='/home/robincheong/sketch2img/ckpts/',
-                        help='Directory in which to save checkpoints.')
-    parser.add_argument('--name', type=str, required=True, help='name to use for tensorboard logging')
     parser.add_argument('--num_threads', default=4, type=int, help='Number of threads for the DataLoader.')
-    parser.add_argument('--toy', action='store_true', help='Use reduced dataset if true.')
-    parser.add_argument('--toy_size', type=int, default=5,
-                        help='How many of each type to include in the toy dataset.')
     parser.add_argument('--img_size', type=int, default=512,
                         help='Size of img to use')
     parser.add_argument('--dataset', type=str, required=True, choices=('eitz', 'sketchy'), help='which dataset to use')
     parser.add_argument('--local', action="store_true", default=False, help='true if running on local computer')
-    parser.add_argument('--loss_type', type=str, required=True, choices=('classify', 'binary', 'trip', 'quad'), 
-                        help='which type of contrastive loss to use')
-    parser.add_argument('--log_dir', type=str, required=True, default="logs/",
-                        help="directory to save the tensorboard log files to")
     parser.add_argument('--model', type=str, required=True, choices=('resnet', 'squeezenet'), help='which model to use')
-    parser.add_argument('--alpha', required=True, type=float, help='weighting for embedding vs classification loss')
-    parser.add_argument('--lr', default=1e-2, type=float, help="learning rate to start with")
-    parser.add_argument('--wd', default=5e-3, type=float, help="l2 reg term")
+    
     return parser
 

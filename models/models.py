@@ -68,7 +68,7 @@ class SqueezeNet(FeatureExtractor):
 
 class ResNet(FeatureExtractor):
     
-    def __init__(self, args):
+    def __init__(self):
         super().__init__()
         resnet18 = torchvision.models.resnet18(pretrained=True)
         modules = list(resnet18.children())[:-2]
@@ -78,7 +78,7 @@ class ResNet(FeatureExtractor):
         self.name = "resnet"
 
     def forward(self, x):
-        logits = self.features(x)
+        logits = self.extract_features(x)
         logits = self.classifier(logits)
         return logits
     
@@ -91,25 +91,45 @@ class ResNet(FeatureExtractor):
     
     def make_predictions(self, features):
         return self.classifier(features)
+
+class ConvDecoder(Decoder):
+    def __init__(self, args):
+        super().__init__()
+        
+        self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(1),
+            nn.ReLU(),
+            nn.ConvTranspose2d())
+            
+                        
+                            
+    
+    def forward(self, x):
+        raise NotImplementedError
+    
     
 # [WIP]
 class VAE(FeatureExtractor):
     
-    def __init__(self, args):
+    def __init__(self, args, encoder=None):
         
-        # encoder portion of the network uses 
-        self.gap = nn.AdaptiveAvgPool2d(1)
+        # if an encoder is passed in, use it; otherwise use ResNet as default
+        self.encoder = encoder if encoder else ResNet(args)
+        self.decoder = LinearDecoder(args)
+        
+        # assumes encoder returns a layer of size 512
         self.fc_mean = nn.Linear(512, args.h_size)
         self.fc_logvar = nn.Linear(512, args.h_size)
         
+        
     def encode(self, x):
-        a = self.features(x)
-        a = self.gap(a)
+        a = self.encoder.extract_features(x)
         return self.fc_mean(a), self.fc_logvar(a)
 
-    def reparameterize(self, mu, logvar):
+    
+    def reparameterize(self, mean, log_var):
         if self.training:
-            std = torch.exp(0.5*logvar)
+            std = torch.exp(0.5*log_var)
             eps = torch.randn_like(std)
             return eps.mul(std).add_(mu)
         else:
@@ -118,8 +138,12 @@ class VAE(FeatureExtractor):
     def decode(self, z):
         h3 = F.relu(self.fc3(z))
         return F.sigmoid(self.fc4(h3))
+    
+    def save_models():
+        raise NotImplementedError
 
+    
     def forward(self, x):
-        mu, logvar = self.encode(x.view(-1, 784))
+        mu, logvar = self.encode(x)
         z = self.reparameterize(mu, logvar)
         return self.decode(z), mu, logvar

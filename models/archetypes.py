@@ -16,4 +16,9 @@ class FeatureExtractor(nn.Module):
 class Encoder(FeatureExtractor):
     def __init__(self):
         super().__init__()
+        
+class Decoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
     

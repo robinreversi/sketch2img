@@ -13,14 +13,14 @@ from collections import namedtuple
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from sklearn.neighbors import NearestNeighbors,LSHForest
-from models.models import SqueezeNet
+from models.models import SqueezeNet, ResNet
 from utils import get_img_list, img_path_to_tensor, feats_from_img, get_default_parser
 
 def eval_model(args):    
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     if args.model == "resnet":
-        model = ResNet(args)
+        model = ResNet()
     elif args.model == "squeezenet":
         model = SqueezeNet(args)
 
@@ -31,7 +31,7 @@ def eval_model(args):
     
     model.eval()
     
-    test_img_list = get_img_list('test')
+    test_img_list = get_img_list(args)
     test_feats = []
         
     # mapping from a photo idx to a list of features of sketches associated 
@@ -47,13 +47,15 @@ def eval_model(args):
         img_cat, img_name = local_path.split('/')
         img_name = img_name.split(".")[0]
         full_photo_path = os.path.join(PHOTO_DIR, local_path)
-        test_feats.append(feats_from_img(model, device, full_photo_path, args.img_size))
+        is_sketch = False
+        test_feats.append(feats_from_img(model, device, full_photo_path, is_sketch, args.img_size))
         
         sketches_in_cat = os.listdir(SKETCH_DIR + img_cat)
         matching_sketches = [sketch for sketch in sketches_in_cat if sketch.startswith(img_name)]
         for sketch in matching_sketches:
             full_sketch_path = os.path.join(SKETCH_DIR, img_cat, sketch)
-            sketch_feats = feats_from_img(model, device, full_sketch_path, args.img_size)
+            is_sketch = True
+            sketch_feats = feats_from_img(model, device, full_sketch_path, is_sketch, args.img_size)
             sketch_feats = sketch_feats.reshape(sketch_feats.shape[0], -1)
             photo2sketch[i].append(sketch_feats)
             if args.pca:
@@ -84,7 +86,6 @@ def eval_model(args):
             if args.pca:
                 sketch_feat = pca.transform(sketch_feat)
             distances, knns = nbrs.kneighbors(sketch_feat, n_neighbors=5)
-            print(knns)
             knns = knns[0]
             if test_img in knns:
                 top_5 += 1
@@ -108,6 +109,8 @@ if __name__ == '__main__':
     parser = get_default_parser()
     parser.add_argument('--pca', type=int, default=0, 
                         help="Use PCA to reduce dims to specified value; if 0, do not use PCA")
+    parser.add_argument('--phase', type=str, choices=('train', 'val', 'test'), default='val', 
+                        help="x set to evaluate over")
     args = parser.parse_args()
     eval_model(args)
                           
