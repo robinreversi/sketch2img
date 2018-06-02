@@ -37,9 +37,7 @@ def eval_model(args):
     # mapping from a photo idx to a list of features of sketches associated 
     # with the photo
     photo2sketch = defaultdict(list)
-    
-    if args.pca:
-        all_sketch_feats = []
+    photo2sketch_paths = defaultdict(list)
     
     print("Generating feats...")
     
@@ -47,29 +45,20 @@ def eval_model(args):
         img_cat, img_name = local_path.split('/')
         img_name = img_name.split(".")[0]
         full_photo_path = os.path.join(PHOTO_DIR, local_path)
-        is_sketch = False
-        test_feats.append(feats_from_img(model, device, full_photo_path, is_sketch, args.img_size))
+        test_feats.append(feats_from_img(model, device, full_photo_path, is_sketch=False, img_size=args.img_size))
         
         sketches_in_cat = os.listdir(SKETCH_DIR + img_cat)
         matching_sketches = [sketch for sketch in sketches_in_cat if sketch.startswith(img_name)]
         for sketch in matching_sketches:
             full_sketch_path = os.path.join(SKETCH_DIR, img_cat, sketch)
-            is_sketch = True
-            sketch_feats = feats_from_img(model, device, full_sketch_path, is_sketch, args.img_size)
+            sketch_feats = feats_from_img(model, device, full_sketch_path, is_sketch=True, img_size=args.img_size)
             sketch_feats = sketch_feats.reshape(sketch_feats.shape[0], -1)
             photo2sketch[i].append(sketch_feats)
-            if args.pca:
-                all_sketch_feats.append(sketch_feats)
-                
+            photo2sketch_paths[i].append((full_photo_path, full_sketch_path))
 
     test_feats = np.array(test_feats)
     test_feats = test_feats.reshape(test_feats.shape[0], -1)
 
-    if args.pca:    
-        pca = PCA(n_components=args.pca)
-        pca.fit(all_sketch_feats)
-        test_feats = pca.transform(test_feats)
-    
     nbrs = NearestNeighbors(n_neighbors=len(test_feats), algorithm='brute', metric='l2').fit(test_feats)
 
     top_5 = 0
@@ -78,13 +67,13 @@ def eval_model(args):
     
     # frequency dist. of the rank the true matching image is at
     # ranking_hist = [0 for _ in range(1250)]
-        
+
+    print("Evaluating photos")
+    
     for test_img in photo2sketch:
         print(f"EVALUATING PHOTO NO {test_img} / 1250")
         total_imgs += len(photo2sketch[test_img])
         for sketch_feat in photo2sketch[test_img]:
-            if args.pca:
-                sketch_feat = pca.transform(sketch_feat)
             distances, knns = nbrs.kneighbors(sketch_feat, n_neighbors=5)
             knns = knns[0]
             if test_img in knns:
@@ -107,8 +96,6 @@ def eval_model(args):
 
 if __name__ == '__main__':
     parser = get_default_parser()
-    parser.add_argument('--pca', type=int, default=0, 
-                        help="Use PCA to reduce dims to specified value; if 0, do not use PCA")
     parser.add_argument('--phase', type=str, choices=('train', 'val', 'test'), default='val', 
                         help="x set to evaluate over")
     args = parser.parse_args()

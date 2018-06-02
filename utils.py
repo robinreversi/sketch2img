@@ -1,18 +1,13 @@
 from loaders.EitzDataLoader import EitzDataLoader
 from loaders.SketchyDataLoader import SketchyDataLoader
+from loaders.datasets.constants import *
 from PIL import Image
+import random
 import numpy as np
 import torch.nn as nn
 import argparse
 import torch
 import torchvision.transforms as T
-
-
-PHOTO_MEAN = np.array([0.47122188, 0.44775212, 0.39636577], dtype=np.float32)
-SKETCH_MEAN = np.array([0.95263444, 0.95263444, 0.95263444], dtype=np.float32)
-
-SKETCH_STD = np.array([0.35874852, 0.35874852, 0.35874852], dtype=np.float32)
-PHOTO_STD = np.array([0.46127741, 0.46127741, 0.46127741], dtype=np.float32)
 
 def get_dataloaders(args):
     """ Returns a dict with dataloaders for each phase.
@@ -58,9 +53,14 @@ def load_sketchy_images(inputs, loss_type, device, img_size):
             example = example[:2]
         elif loss_type == "trip":
             example = example[:3]
+        
+        flip = int(random.random() < .5)
+        rotate = int(random.random() < .5)
+        
         for idx, path in enumerate(example):
-            is_sketch = idx == 0
-            images[idx].append(preprocess(Image.open(path), is_sketch, img_size).to(device))
+            is_sketch = idx == 0    
+            images[idx].append(preprocess(Image.open(path), is_sketch, img_size, flip, rotate).to(device))
+            
     all_images = [] 
     for img_set in images:
         all_images += img_set
@@ -92,10 +92,10 @@ def get_loss_fn(dataset, loss_type):
         elif loss_type == "trip":
             def trip_loss(sketch_embed, correct_photo_embed, 
                           same_cat_diff_photo_embed, 
-                          sketch_logits, photo_logits, labels, alpha=.2):
+                          sketch_logits, photo_logits, labels, alpha=5):
                 
-                loss1 = mse_loss(sketch_embed, correct_photo_embed)
-                loss2 = mse_loss(sketch_embed, same_cat_diff_photo_embed)
+                loss1 = torch.sum(mse_loss(sketch_embed, correct_photo_embed), dim=1)
+                loss2 = torch.sum(mse_loss(sketch_embed, same_cat_diff_photo_embed), dim=1)
                 embedding_loss = torch.sum(torch.clamp(loss1 - loss2 + alpha, min=0))
                 classification_loss = ce_loss(sketch_logits, labels) + ce_loss(photo_logits, labels)
                 return embedding_loss, classification_loss 
@@ -105,21 +105,32 @@ def get_loss_fn(dataset, loss_type):
         elif loss_type == "quad":
             def quad_loss(sketch_embed, correct_photo_embed, 
                           same_cat_diff_photo_embed, diff_cat_photo_embed, 
-                          sketch_logits, photo_logits, labels, alpha=.2):
+                          sketch_logits, photo_logits, labels, alpha=1):
                 
-                loss1 = torch.clamp(mse_loss(sketch_embed, correct_photo_embed) 
-                            - mse_loss(sketch_embed, same_cat_diff_photo_embed) + alpha, min=0)
-                loss2 = torch.clamp(mse_loss(sketch_embed, correct_photo_embed)
-                            - mse_loss(sketch_embed, diff_cat_photo_embed) + alpha, min=0)
-                loss3 = torch.clamp(mse_loss(sketch_embed, same_cat_diff_photo_embed)
-                            - mse_loss(sketch_embed, diff_cat_photo_embed) + alpha, min=0)
+                loss1 = torch.clamp(torch.sum(mse_loss(sketch_embed, correct_photo_embed), dim=1) 
+                                  - torch.sum(mse_loss(sketch_embed, same_cat_diff_photo_embed), dim=1) + alpha, min=0)
+                loss2 = torch.clamp(torch.sum(mse_loss(sketch_embed, correct_photo_embed), dim=1)
+                                  - torch.sum(mse_loss(sketch_embed, diff_cat_photo_embed), dim=1) + alpha, min=0)
+                loss3 = torch.clamp(torch.sum(mse_loss(sketch_embed, same_cat_diff_photo_embed), dim=1)
+                                  - torch.sum(mse_loss(sketch_embed, diff_cat_photo_embed), dim=1) + alpha, min=0)
                 embedding_loss = torch.sum(loss1 + loss2 + loss3)
                 classification_loss = ce_loss(sketch_logits, labels) + ce_loss(photo_logits, labels)
                 return embedding_loss, classification_loss 
 
             return quad_loss
-    else: 
-        raise ValueError
+        
+        elif loss_type == "vae":
+            # CITE https://github.com/3ammor/Variational-Autoencoder-pytorch/blob/master/graph/mse_loss.py
+            def vae_loss(recon_x, x, mu, logvar):
+                mse_loss = nn.MSELoss()
+                
+                kl_divergence = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+                
+                return kl_divergence, mse_loss(recon_x, x)
+            
+            return vae_loss
+
+    raise ValueError
     
 def img_path_to_tensor(img_path, is_sketch, img_size=512):
     """ Reads an image and converts to a tensor.
@@ -148,17 +159,26 @@ def feats_from_img(model, device, img_path, is_sketch, img_size=512):
     return feats
 
         
-def preprocess(img, is_sketch, img_size=256):
+def preprocess(img, is_sketch, img_size=256, flip=False, rotate=False):
     mean = SKETCH_MEAN if is_sketch else PHOTO_MEAN
     std = SKETCH_STD if is_sketch else PHOTO_STD
-    transform = T.Compose([
-        T.Resize(img_size),
-        T.ToTensor(),
-        T.Normalize(mean=torch.tensor(mean, dtype=torch.float32),
+    
+    transforms = [T.Resize(img_size)]
+    
+    if flip:
+        transforms += [T.RandomHorizontalFlip(1)]
+    if rotate:
+        transforms += [T.RandomRotation(30)]
+    
+    transforms += [T.Resize(img_size), 
+                   T.ToTensor(), 
+                   T.Normalize(mean=torch.tensor(mean, dtype=torch.float32),
                     std=torch.tensor(std, dtype=torch.float32)),
-        T.Lambda(lambda x: x[None]),
-    ])
-    return transform(img)
+                   T.Lambda(lambda x: x[None])]
+    
+    transforms = T.Compose(transforms)
+    
+    return transforms(img)
 
 
 def get_img_list(args):
@@ -198,9 +218,11 @@ def get_default_parser():
     parser.add_argument('--num_threads', default=4, type=int, help='Number of threads for the DataLoader.')
     parser.add_argument('--img_size', type=int, default=512,
                         help='Size of img to use')
-    parser.add_argument('--dataset', type=str, required=True, choices=('eitz', 'sketchy'), help='which dataset to use')
+    parser.add_argument('--dataset', type=str, required=True, choices=('eitz', 'sketchy'), default="sketchy", help='which dataset to use')
     parser.add_argument('--local', action="store_true", default=False, help='true if running on local computer')
-    parser.add_argument('--model', type=str, required=True, choices=('resnet', 'squeezenet'), help='which model to use')
+    parser.add_argument('--model', type=str, required=True, choices=('resnet', 'squeezenet', 'ConvVAE'), default="resnet",
+                        help='which model to use')
+    parser.add_argument('--verbose', action="store_true", default=False, help='turn on for error printing')
     
     return parser
 
