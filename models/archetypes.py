@@ -12,6 +12,9 @@ class FeatureExtractor(nn.Module):
 
     def extract_features(self, x):
         raise NotImplementedError
+        
+    def make_predictions(self, x):
+        raise NotImplementedError
 
 class Encoder(FeatureExtractor):
     def __init__(self):

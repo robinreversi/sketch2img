@@ -8,5 +8,5 @@ class SketchyDataLoader(DataLoader):
         dataset = SketchyDataset(args, phase)
         super().__init__(dataset,
                          batch_size=args.batch_size,
-                         shuffle=True if phase == "train" else False,
+                         shuffle=True,
                          num_workers=args.num_threads)

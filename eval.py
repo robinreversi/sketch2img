@@ -1,92 +1,132 @@
+from __future__ import print_function, division
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
-import PIL
-from PIL import Image
+import torchvision.utils as tvutils
 
-from collections import defaultdict
-import numpy as np
-from loaders.datasets.constants import *
-import os
+from collections import defaultdict, namedtuple
 from scipy.misc import imread
-from collections import namedtuple
-from sklearn.decomposition import PCA
+from sklearn.neighbors import NearestNeighbors
+import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.neighbors import NearestNeighbors,LSHForest
-from models.models import SqueezeNet, ResNet
-from utils import get_img_list, img_path_to_tensor, feats_from_img, get_default_parser
+import time
+import datetime
+import os
+import copy
+from pathlib import Path
+from PIL import Image
+import cv2
+import random
 
+
+from models.models import SqueezeNet, ResNet, ConvDualVAE, ConvDualAE, ConvSingleAE, ConvSingleVAE
+from utils import get_dataloaders, get_default_parser, load_sketchy_images, log_metrics, get_eval_parser
+
+from model_utils import get_loss_fn, load_model, vae_forward, ae_forward, \
+                        classify_contrast_forward, gan_forward
+
+import argparse
+import pickle
+from loaders.datasets.constants import *
+
+
+
+
+def save_knns(sketch_path, knns, idx2photo, name, img_loc):
+    comb_imgs = [np.array(Image.open(sketch_path))] 
+    comb_imgs += [np.array(Image.open(idx2photo[idx])) for idx in knns] 
+    cv2.rectangle(comb_imgs[0], (0, 0), (255, 255), (0, 0, 255), 10)
+    if img_loc != -1:
+        cv2.rectangle(comb_imgs[img_loc + 1], (0, 0), (255, 255), (0, 255, 0), 10)
+        print(comb_imgs[img_loc+1].shape)
+    comb_imgs = np.hstack(comb_imgs)
+    comb_imgs = Image.fromarray(comb_imgs)
+    
+
+    comb_imgs.save(name)
+    
 def eval_model(args):    
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
-    if args.model == "resnet":
-        model = ResNet()
-    elif args.model == "squeezenet":
-        model = SqueezeNet(args)
 
-    model.to(device)
-    
-    if args.ckpt_path:
-        model.load_state_dict(torch.load(args.ckpt_path))
-    
+    model = load_model(args, device)
     model.eval()
-    
-    test_img_list = get_img_list(args)
-    test_feats = []
-        
-    # mapping from a photo idx to a list of features of sketches associated 
-    # with the photo
-    photo2sketch = defaultdict(list)
-    photo2sketch_paths = defaultdict(list)
-    
-    print("Generating feats...")
-    
-    for i, local_path in enumerate(test_img_list):
-        img_cat, img_name = local_path.split('/')
-        img_name = img_name.split(".")[0]
-        full_photo_path = os.path.join(PHOTO_DIR, local_path)
-        test_feats.append(feats_from_img(model, device, full_photo_path, is_sketch=False, img_size=args.img_size))
-        
-        sketches_in_cat = os.listdir(SKETCH_DIR + img_cat)
-        matching_sketches = [sketch for sketch in sketches_in_cat if sketch.startswith(img_name)]
-        for sketch in matching_sketches:
-            full_sketch_path = os.path.join(SKETCH_DIR, img_cat, sketch)
-            sketch_feats = feats_from_img(model, device, full_sketch_path, is_sketch=True, img_size=args.img_size)
-            sketch_feats = sketch_feats.reshape(sketch_feats.shape[0], -1)
-            photo2sketch[i].append(sketch_feats)
-            photo2sketch_paths[i].append((full_photo_path, full_sketch_path))
 
-    test_feats = np.array(test_feats)
-    test_feats = test_feats.reshape(test_feats.shape[0], -1)
+    loader = get_dataloaders(args)[args.phase]
 
-    nbrs = NearestNeighbors(n_neighbors=len(test_feats), algorithm='brute', metric='l2').fit(test_feats)
+    with open('photo2idx_{}.pkl'.format(args.phase), 'rb') as f:
+        photo2idx = pickle.load(f)
+    idx2photo = {i: photo2idx[i] for i in photo2idx}
+
+    test_ftrs = np.zeros((len(photo2idx), 512))
+    train_ftrs = defaultdict(list)
+
+    batch_num = 0 
+
+    for inputs, _ in loader:
+        print("Batch num: ", batch_num)
+        batch_num += 1
+        N = len(inputs)
+        photo_idxs = [photo2idx[example.split('++')[1]] for example in inputs]
+        sketch_paths = [example.split('++')[0] for example in inputs]
+        inputs = load_sketchy_images(inputs, args.loss_type, device, args.img_size)
+        features = model.extract_features(inputs).cpu().detach()
+        indices = torch.tensor(range(0, 2 * N))
+        selected_features = torch.index_select(features, 0, indices)
+        sketch_ftrs, photo_ftrs = torch.split(selected_features, N)
+
+        for i, photo_idx in enumerate(photo_idxs):
+            test_ftrs[photo_idx] = photo_ftrs[i].numpy()
+            train_ftrs[photo_idx].append((sketch_ftrs[i].numpy(), sketch_paths[i]))
+
+        del inputs
+        del features
+    
+    idx2photo = {photo2idx[path]: path for path in photo2idx}
+    
+    nbrs = NearestNeighbors(n_neighbors=len(test_ftrs), algorithm='brute', metric='l2').fit(test_ftrs)
 
     top_5 = 0
     top_1 = 0
     total_imgs = 0
-    
+    fails = 0
+    successes = 0
+
     # frequency dist. of the rank the true matching image is at
     # ranking_hist = [0 for _ in range(1250)]
 
     print("Evaluating photos")
-    
-    for test_img in photo2sketch:
-        print(f"EVALUATING PHOTO NO {test_img} / 1250")
-        total_imgs += len(photo2sketch[test_img])
-        for sketch_feat in photo2sketch[test_img]:
-            distances, knns = nbrs.kneighbors(sketch_feat, n_neighbors=5)
+
+    for test_img_idx in train_ftrs:
+        print(f"EVALUATING PHOTO NO {test_img_idx} / 1250")
+        total_imgs += len(train_ftrs[test_img_idx])
+        for sketch_feat, sketch_path in train_ftrs[test_img_idx]:
+            distances, knns = nbrs.kneighbors(sketch_feat.reshape(1, -1), n_neighbors=5)
             knns = knns[0]
-            if test_img in knns:
+            if test_img_idx in knns:
                 top_5 += 1
-            if test_img == knns[0]:
+                if successes < 10 and random.random() < .1:
+                    successes += 1
+                    img_loc = np.where(knns == test_img_idx)[0][0]
+                    print(img_loc)
+                    save_knns(sketch_path, knns, idx2photo, "search/success_{}.png".format(successes), img_loc)
+
+            elif fails < 10 and random.random() < .1:
+                fails += 1
+                save_knns(sketch_path, knns, idx2photo, "search/fails_{}.png".format(fails), -1)
+
+            if test_img_idx == knns[0]:
                 top_1 += 1
-                
+
+
+
             for idx, neighbor in enumerate(knns):
-                if neighbor == test_img:
-                    print(f'\t ranking for img {test_img} found at {idx + 1}')
+                if neighbor == test_img_idx:
+                    print(f'\t ranking for img {test_img_idx} found at {idx + 1}')
                     break
- 
-            
+
+
     print(f'Total imgs: {total_imgs}')
     print(f'Total Top 1 Correct: {top_1}')
     print(f'Total Top 5 Correct: {top_5}')
@@ -95,9 +135,11 @@ def eval_model(args):
 
 
 if __name__ == '__main__':
-    parser = get_default_parser()
-    parser.add_argument('--phase', type=str, choices=('train', 'val', 'test'), default='val', 
-                        help="x set to evaluate over")
+    parser = get_eval_parser()
     args = parser.parse_args()
     eval_model(args)
                           
+
+
+
+

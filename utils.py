@@ -8,6 +8,8 @@ import torch.nn as nn
 import argparse
 import torch
 import torchvision.transforms as T
+import torchvision.utils as tvutils
+from models.models import SqueezeNet, ResNet, ConvDualVAE, ConvDualAE, ConvSingleAE, ConvSingleVAE
 
 def get_dataloaders(args):
     """ Returns a dict with dataloaders for each phase.
@@ -34,7 +36,7 @@ def load_sketchy_images(inputs, loss_type, device, img_size):
     
     Args:
         inputs: a list of file path tuples
-        loss_type: the type of loss to use, one of "classify", "binary", "trip", "quad"
+        loss_type: the type of loss to use
         device: cuda or cpu
         img_size: rescale size
         
@@ -49,9 +51,11 @@ def load_sketchy_images(inputs, loss_type, device, img_size):
     for example in inputs:
         example = example.split("++")
         # only compute on relevant images by removing unnecessary paths
-        if loss_type == "classify" or loss_type == "binary":
+        if loss_type in ["classify", "binary", 'vae', 'vae+embed', 
+                         'vae+embed+classify', 'ae', 'ae+embed', 
+                         'ae+embed+classify', 'gan', 'eval']:
             example = example[:2]
-        elif loss_type == "trip":
+        elif loss_type in ["trip"]:
             example = example[:3]
         
         flip = int(random.random() < .5)
@@ -66,73 +70,8 @@ def load_sketchy_images(inputs, loss_type, device, img_size):
         all_images += img_set
     return torch.cat(all_images)
         
-def get_loss_fn(dataset, loss_type):
-    ce_loss = nn.CrossEntropyLoss()
     
-    def mse_loss(input_, target):
-        return (input_ - target) ** 2 / len(input_)
-    
-    if dataset == "eitz" or loss_type == "classify":
-        def classify_loss(sketch_logits, photo_logits, labels):
-            return ce_loss(sketch_logits, labels) + ce_loss(photo_logits, labels)
-
-        return classify_loss
-    elif dataset == "sketchy":
-        
-        if loss_type == "binary":
-            def binary_loss(sketch_embed, correct_photo_embed, 
-                            sketch_logits, photo_logits, labels):
-                
-                embedding_loss = torch.sum(mse_loss(sketch_embed, correct_photo_embed))
-                classification_loss = ce_loss(sketch_logits, labels) + ce_loss(photo_logits, labels)
-                return embedding_loss, classification_loss 
-                
-            return binary_loss
-
-        elif loss_type == "trip":
-            def trip_loss(sketch_embed, correct_photo_embed, 
-                          same_cat_diff_photo_embed, 
-                          sketch_logits, photo_logits, labels, alpha=5):
-                
-                loss1 = torch.sum(mse_loss(sketch_embed, correct_photo_embed), dim=1)
-                loss2 = torch.sum(mse_loss(sketch_embed, same_cat_diff_photo_embed), dim=1)
-                embedding_loss = torch.sum(torch.clamp(loss1 - loss2 + alpha, min=0))
-                classification_loss = ce_loss(sketch_logits, labels) + ce_loss(photo_logits, labels)
-                return embedding_loss, classification_loss 
-            
-            return trip_loss
-
-        elif loss_type == "quad":
-            def quad_loss(sketch_embed, correct_photo_embed, 
-                          same_cat_diff_photo_embed, diff_cat_photo_embed, 
-                          sketch_logits, photo_logits, labels, alpha=1):
-                
-                loss1 = torch.clamp(torch.sum(mse_loss(sketch_embed, correct_photo_embed), dim=1) 
-                                  - torch.sum(mse_loss(sketch_embed, same_cat_diff_photo_embed), dim=1) + alpha, min=0)
-                loss2 = torch.clamp(torch.sum(mse_loss(sketch_embed, correct_photo_embed), dim=1)
-                                  - torch.sum(mse_loss(sketch_embed, diff_cat_photo_embed), dim=1) + alpha, min=0)
-                loss3 = torch.clamp(torch.sum(mse_loss(sketch_embed, same_cat_diff_photo_embed), dim=1)
-                                  - torch.sum(mse_loss(sketch_embed, diff_cat_photo_embed), dim=1) + alpha, min=0)
-                embedding_loss = torch.sum(loss1 + loss2 + loss3)
-                classification_loss = ce_loss(sketch_logits, labels) + ce_loss(photo_logits, labels)
-                return embedding_loss, classification_loss 
-
-            return quad_loss
-        
-        elif loss_type == "vae":
-            # CITE https://github.com/3ammor/Variational-Autoencoder-pytorch/blob/master/graph/mse_loss.py
-            def vae_loss(recon_x, x, mu, logvar):
-                mse_loss = nn.MSELoss()
-                
-                kl_divergence = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-                
-                return kl_divergence, mse_loss(recon_x, x)
-            
-            return vae_loss
-
-    raise ValueError
-    
-def img_path_to_tensor(img_path, is_sketch, img_size=512):
+def img_path_to_tensor(img_path, is_sketch, img_size=256):
     """ Reads an image and converts to a tensor.
     
     Args:
@@ -144,7 +83,7 @@ def img_path_to_tensor(img_path, is_sketch, img_size=512):
     return img
 
 
-def feats_from_img(model, device, img_path, is_sketch, img_size=512):
+def feats_from_img(model, device, img_path, is_sketch, img_size=256):
     """ Converts a list of file paths into corresponding list of tensors.
     
     Args:
@@ -163,12 +102,13 @@ def preprocess(img, is_sketch, img_size=256, flip=False, rotate=False):
     mean = SKETCH_MEAN if is_sketch else PHOTO_MEAN
     std = SKETCH_STD if is_sketch else PHOTO_STD
     
-    transforms = [T.Resize(img_size)]
-    
+    transforms = []
+
     if flip:
         transforms += [T.RandomHorizontalFlip(1)]
-    if rotate:
-        transforms += [T.RandomRotation(30)]
+        
+    if not is_sketch:
+        transforms += [T.Grayscale(num_output_channels=3)]
     
     transforms += [T.Resize(img_size), 
                    T.ToTensor(), 
@@ -177,8 +117,14 @@ def preprocess(img, is_sketch, img_size=256, flip=False, rotate=False):
                    T.Lambda(lambda x: x[None])]
     
     transforms = T.Compose(transforms)
-    
-    return transforms(img)
+    transformed_img = transforms(img)
+    if is_sketch:
+        img.save('sketch.png')
+        tvutils.save_image(transformed_img, 'sketch_preprocess.png')
+    else:
+        img.save('photo.png')
+        tvutils.save_image(transformed_img, 'photo_preprocess.png')
+    return transformed_img
 
 
 def get_img_list(args):
@@ -204,25 +150,87 @@ def deprocess(img, is_sketch):
     return transform(img)
 
 
-def rescale(x):
-    low, high = x.min(), x.max()
-    x_rescaled = (x - low) / (high - low)
-    return x_rescaled
-
-
 def get_default_parser():
     """ Parses args for running the model."""
     parser = argparse.ArgumentParser()
     parser.add_argument('--ckpt_path', type=str, default='',
                         help='checkpoint path of the model to load, if '' starts from scratch')
     parser.add_argument('--num_threads', default=4, type=int, help='Number of threads for the DataLoader.')
-    parser.add_argument('--img_size', type=int, default=512,
+    parser.add_argument('--img_size', type=int, default=256,
                         help='Size of img to use')
-    parser.add_argument('--dataset', type=str, required=True, choices=('eitz', 'sketchy'), default="sketchy", help='which dataset to use')
+    parser.add_argument('--dataset', type=str, choices=('eitz', 'sketchy'), default="sketchy", help='which dataset to use')
     parser.add_argument('--local', action="store_true", default=False, help='true if running on local computer')
-    parser.add_argument('--model', type=str, required=True, choices=('resnet', 'squeezenet', 'ConvVAE'), default="resnet",
+    parser.add_argument('--model', type=str, required=True, choices=('resnet', 'squeezenet', 'ConvDualVAE', 
+                                                                     'ConvDualAE', 'ConvSingleVAE', 'ConvSingleAE',
+                                                                     'EmbedGAN'),
                         help='which model to use')
     parser.add_argument('--verbose', action="store_true", default=False, help='turn on for error printing')
     
+    
     return parser
 
+def get_train_parser():
+    parser = get_default_parser()
+    parser.add_argument('--alpha', required=True, type=float, help='changes various loss weightings depending on model type')
+    parser.add_argument('--lr', default=1e-3, type=float, help="learning rate to start with")
+    parser.add_argument('--wd', default=0, type=float, help="l2 reg term")
+    parser.add_argument('--loss_type', type=str, required=True, choices=('classify', 'binary', 
+                                                                         'trip', 'quad', 
+                                                                         'vae', 'vae+embed', 'vae+embed+classify',
+                                                                         'ae', 'ae+embed', 'ae+embed+classify',
+                                                                         'gan'),
+                        help='which type of contrastive loss to use')
+    parser.add_argument('--num_epochs', type=int, default=10, help='number of epochs.')
+    parser.add_argument('--batch_size', type=int, default=32, help='batch size.')
+    parser.add_argument('--toy', action='store_true', help='Use reduced dataset if true.')
+    parser.add_argument('--toy_size', type=int, default=5,
+                        help='how many of each type to include in the toy dataset.')
+    parser.add_argument('--save_dir', type=str, default='/home/robincheong/sketch2img/ckpts/',
+                        help='directory in which to save checkpoints.')
+    parser.add_argument('--log_dir', type=str, default="logs/",
+                        help="directory to save the tensorboard log files to")
+    parser.add_argument('--name', type=str, required=True, help='name to use for tensorboard logging')
+    parser.add_argument('--h_size', type=int, default=512, help="number of hidden units to use in the AE")
+    parser.add_argument('--ftr_extractor_path', type=str, default='', 
+                        help='path to model to use as a feature extractor in the AE')
+    parser.add_argument('--train_decoders', type=bool, default=False, 
+                        help='train decoders without affecting encoders')
+    parser.add_argument('--optim', type=str, default='sgd')
+    parser.add_argument('--modality', type=str, default='both',
+                        help="sketch or photo (for SingleVAE/ SingleAE purposes only")
+    parser.add_argument('--photo_encoder_path', type=str)
+    parser.add_argument('--sketch_encoder_path', type=str)
+    return parser
+
+def get_eval_parser():
+    parser = get_default_parser()
+    parser.add_argument('--phase', type=str, choices=('train', 'val', 'test'), default='val', 
+                        help="x set to evaluate over")
+    parser.add_argument('--h_size', type=int, default=512)
+    parser.add_argument('--ftr_extractor_path', type=str, default='', 
+                        help='path to model to use as a feature extractor in the AE')
+    parser.add_argument('--photo_encoder_path', type=str)
+    parser.add_argument('--sketch_encoder_path', type=str)
+    parser.add_argument('--batch_size', type=int, default=32, help='batch size.')
+    parser.add_argument('--loss_type', type=str, default='eval')
+    parser.add_argument('--num_fails', type=int, default=5)
+    parser.add_argument('--num_success', type=int, default=5)
+    return parser
+    
+def log_metrics(metrics, writer, stage, idx):
+    """ Logs the metrics stored in metrics. 
+    
+    Args: 
+        metrics: a dict containing metric name -> metric val (tensor)
+        writer: a tensorboard writer
+        stage: one of 'batch', 'train', 'val'
+        idx: batch_num or epoch
+    """
+    
+    print('=' * 50)
+    for metric_name in metrics:
+        metric_val = metrics[metric_name]
+        if type(metric_val) == torch.Tensor:
+            metric_val = metric_val.item()
+        print('{}_{}: {}'.format(stage, metric_name, metric_val))
+        writer.add_scalar('{}/{}'.format(stage, metric_name), metric_val, idx)
